@@ -2,6 +2,7 @@ import discord
 import requests
 from bs4 import BeautifulSoup
 from discord.ext import commands
+import hashlib
 import os
 
 def setup(client):
@@ -27,10 +28,11 @@ def setup(client):
             link_element = article.find('a', href=True)
             link = f"https://visitturku.fi{link_element['href']}" if link_element else 'No link available'
             
-            article_id = link.split('/')[-1]  # Extract the article ID from the link
+            # Generate a unique identifier for the event
+            unique_id = hashlib.sha256((heading + date + link).encode()).hexdigest()
             
             article_info = f"**{heading}**\nDate: {date}\n[Read more]({link})"
-            articles.append((article_id, article_info))
+            articles.append((unique_id, article_info))
         return articles
 
     def read_posted_articles(file_path):
@@ -39,9 +41,9 @@ def setup(client):
         with open(file_path, 'r') as file:
             return set(line.strip() for line in file.readlines())
 
-    def write_posted_article(file_path, article_id):
+    def write_posted_article(file_path, unique_id):
         with open(file_path, 'a') as file:
-            file.write(f"{article_id}\n")
+            file.write(f"{unique_id}\n")
 
     @client.tree.command(name='visitturku', description='Get ongoing week events in Turku')
     async def events_command(interaction: discord.Interaction):
@@ -63,20 +65,20 @@ def setup(client):
             posted_articles = read_posted_articles(posted_articles_file)
 
             # Send only the articles that haven't been sent before
-            unsent_articles = [(article_id, article_info) for article_id, article_info in parsed_articles if article_id not in posted_articles]
+            unsent_articles = [(unique_id, article_info) for unique_id, article_info in parsed_articles if unique_id not in posted_articles]
             if not unsent_articles:
                 await interaction.response.send_message("No new articles found.")
                 return
 
             # Send the first article using interaction response
-            first_article_id, first_article_info = unsent_articles.pop(0)
+            first_article_unique_id, first_article_info = unsent_articles.pop(0)
             await interaction.response.send_message(first_article_info)
-            write_posted_article(posted_articles_file, first_article_id)
+            write_posted_article(posted_articles_file, first_article_unique_id)
 
             # Send subsequent articles using follow-up messages
-            for article_id, article_info in unsent_articles:
+            for unique_id, article_info in unsent_articles:
                 await interaction.followup.send(article_info)
-                write_posted_article(posted_articles_file, article_id)
+                write_posted_article(posted_articles_file, unique_id)
 
         except Exception as e:
             if not interaction.response.is_done():
