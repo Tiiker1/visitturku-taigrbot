@@ -2,11 +2,10 @@ import discord
 import requests
 from bs4 import BeautifulSoup
 from discord.ext import commands
-from discord import app_commands
+import os
 
 def setup(client):
     def fetch_articles():
-        # Fetch the HTML content from the Visit Turku website
         url = 'https://visitturku.fi/tapahtumat'
         response = requests.get(url)
         if response.status_code == 200:
@@ -15,7 +14,6 @@ def setup(client):
             raise Exception("Failed to fetch article data")
 
     def parse_articles(articles_data):
-        # Parse the HTML content to extract articles
         soup = BeautifulSoup(articles_data, 'html.parser')
         article_elements = soup.find_all('article')
         articles = []
@@ -29,9 +27,21 @@ def setup(client):
             link_element = article.find('a', href=True)
             link = f"https://visitturku.fi{link_element['href']}" if link_element else 'No link available'
             
+            article_id = link.split('/')[-1]  # Extract the article ID from the link
+            
             article_info = f"**{heading}**\nDate: {date}\n[Read more]({link})"
-            articles.append(article_info)
+            articles.append((article_id, article_info))
         return articles
+
+    def read_posted_articles(file_path):
+        if not os.path.exists(file_path):
+            return set()
+        with open(file_path, 'r') as file:
+            return set(line.strip() for line in file.readlines())
+
+    def write_posted_article(file_path, article_id):
+        with open(file_path, 'a') as file:
+            file.write(f"{article_id}\n")
 
     @client.tree.command(name='visitturku', description='Get ongoing week events in Turku')
     async def events_command(interaction: discord.Interaction):
@@ -47,14 +57,26 @@ def setup(client):
                 await interaction.response.send_message("No articles found.")
                 return
 
+            commit_data_folder = 'commit_data'
+            os.makedirs(commit_data_folder, exist_ok=True)
+            posted_articles_file = os.path.join(commit_data_folder, 'posted_articles.txt')
+            posted_articles = read_posted_articles(posted_articles_file)
+
+            # Send only the articles that haven't been sent before
+            unsent_articles = [(article_id, article_info) for article_id, article_info in parsed_articles if article_id not in posted_articles]
+            if not unsent_articles:
+                await interaction.response.send_message("No new articles found.")
+                return
+
             # Send the first article using interaction response
-            first_article = parsed_articles.pop(0)
-            await interaction.response.send_message(first_article)
+            first_article_id, first_article_info = unsent_articles.pop(0)
+            await interaction.response.send_message(first_article_info)
+            write_posted_article(posted_articles_file, first_article_id)
 
             # Send subsequent articles using follow-up messages
-            for article_info in parsed_articles:
-                if article_info:  # Ensure the article info is not empty
-                    await interaction.followup.send(article_info)
+            for article_id, article_info in unsent_articles:
+                await interaction.followup.send(article_info)
+                write_posted_article(posted_articles_file, article_id)
 
         except Exception as e:
             if not interaction.response.is_done():
